@@ -36,5 +36,14 @@ class Snapshot:
     def get_context_pack(self, ticker: str) -> dict:
         return self._db.get_context_pack(ticker, self._kt)
 
+    def get_as_of(self, ticker: str, field: str, as_of_event, *, table: str = "prices"):
+        return self._db.get_as_of(ticker, field, as_of_event, self._kt, table=table)
+
+    def provenance(self, ticker: str, event_time=None) -> pd.DataFrame:
+        return self._db.provenance(ticker, event_time)
+
+    def check_data_availability(self, ticker: str, start, end) -> dict:
+        return self._db.check_data_availability(ticker, start, end)
+
     def __repr__(self):
         return f"Snapshot(knowledge_time={self._kt.isoformat()})"

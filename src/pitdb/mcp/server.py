@@ -6,6 +6,7 @@ Start with: pitdb serve [--data-dir PATH]
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -77,7 +78,7 @@ def get_price_history(ticker: str, start: str, end: str, as_of_date: str) -> lis
     records = []
     for _, row in df.iterrows():
         records.append({
-            "date": str(row["event_time"].date()) if hasattr(row["event_time"], "date") else str(row["event_time"]),
+            "date": _event_time_str(row["event_time"]),
             "open": _safe_float(row.get("open")),
             "high": _safe_float(row.get("high")),
             "low": _safe_float(row.get("low")),
@@ -133,7 +134,7 @@ def get_earnings_history(ticker: str, start: str, end: str, as_of_date: str) -> 
     records = []
     for _, row in df.iterrows():
         records.append({
-            "date": str(row["event_time"].date()) if hasattr(row.get("event_time"), "date") else str(row.get("event_time")),
+            "date": _event_time_str(row["event_time"]),
             "period": str(row.get("period", "")),
             "eps_estimate": _safe_float(row.get("eps_estimate")),
             "eps_actual": _safe_float(row.get("eps_actual")),
@@ -183,7 +184,7 @@ def get_corporate_actions(ticker: str, start: str, end: str, as_of_date: str) ->
     records = []
     for _, row in df.iterrows():
         records.append({
-            "date": str(row["event_time"].date()) if hasattr(row.get("event_time"), "date") else str(row.get("event_time")),
+            "date": _event_time_str(row["event_time"]),
             "action_type": str(row.get("action_type", "")),
             "factor": _safe_float(row.get("factor")),
         })
@@ -225,8 +226,11 @@ def list_tickers() -> list[str]:
 # Helpers
 # ------------------------------------------------------------------
 
+def _event_time_str(v) -> str:
+    return str(v.date()) if hasattr(v, "date") else str(v)
+
+
 def _safe_float(v) -> float | None:
-    import math
     if v is None:
         return None
     try:

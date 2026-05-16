@@ -1,20 +1,6 @@
-"""
-Ingestion pipelines for pitdb.
-
-knowledge_time is derived from source metadata, not ingest time:
-  - Prices: market close time on event_date (data is public at EOD)
-  - US fundamentals: SEC EDGAR filing date (10-K/Q including amendments)
-  - SGX fundamentals: SGX announcements API date (dual provenance per ADR 0003)
-  - Corporate actions: announcement date from yfinance
-  - Earnings history: earnings announcement date from yfinance
-
-All writes are append-only via db._append_df().
-"""
-
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -26,63 +12,52 @@ if TYPE_CHECKING:
 
 EDGAR_HEADERS = {"User-Agent": "pitdb/0.1 sudarshan.k@u.nus.edu"}
 
-# yfinance symbol suffixes by exchange identifier
-_YF_SUFFIX: dict[str, str] = {
-    "NYSE": "", "NASDAQ": "", "AMEX": "", "OTC": "",
-    "TSX": ".TO", "TSXV": ".V",
-    "LSE": ".L",
-    "SGX": ".SI",
-    "ASX": ".AX",
-    "HKEX": ".HK",
-    "TSE": ".T",
-    "NSE": ".NS", "BSE": ".BO",
-    "SSE": ".SS", "SZSE": ".SZ",
-    "KRX": ".KS",
-    "EPA": ".PA",
-    "AMS": ".AS",
-    "FRA": ".F",
-    "XETRA": ".DE",
-    "BME": ".MC",
-    "SIX": ".SW",
-    "TWSE": ".TW",
-    "SET": ".BK",
-    "IDX": ".JK",
-    "BOVESPA": ".SA",
-    "BCBA": ".BA",
-    "BMV": ".MX",
-    "CPH": ".CO",
-}
-
-# Market close time in UTC hours by exchange (approximate; ignores DST for date-level accuracy)
-_CLOSE_UTC_HOUR: dict[str, int] = {
-    "NYSE": 21, "NASDAQ": 21, "AMEX": 21, "OTC": 21,
-    "TSX": 21, "TSXV": 21,
-    "LSE": 16,
-    "SGX": 9,
-    "ASX": 6,
-    "HKEX": 8,
-    "TSE": 6,
-    "NSE": 10, "BSE": 10,
-    "SSE": 7, "SZSE": 7,
-    "KRX": 6,
-    "EPA": 16, "AMS": 16,
-    "FRA": 16, "XETRA": 16,
-    "BME": 16,
-    "SIX": 16,
-    "TWSE": 6,
-    "SET": 10,
-    "IDX": 9,
+# Per-exchange yfinance suffix and approximate UTC market close hour.
+# close_hour ignores DST — sufficient for date-level knowledge_time accuracy.
+_EXCHANGE: dict[str, dict] = {
+    "NYSE":    {"suffix": "",     "close_hour": 21},
+    "NASDAQ":  {"suffix": "",     "close_hour": 21},
+    "AMEX":    {"suffix": "",     "close_hour": 21},
+    "OTC":     {"suffix": "",     "close_hour": 21},
+    "TSX":     {"suffix": ".TO",  "close_hour": 21},
+    "TSXV":    {"suffix": ".V",   "close_hour": 21},
+    "LSE":     {"suffix": ".L",   "close_hour": 16},
+    "SGX":     {"suffix": ".SI",  "close_hour": 9},
+    "ASX":     {"suffix": ".AX",  "close_hour": 6},
+    "HKEX":    {"suffix": ".HK",  "close_hour": 8},
+    "TSE":     {"suffix": ".T",   "close_hour": 6},
+    "NSE":     {"suffix": ".NS",  "close_hour": 10},
+    "BSE":     {"suffix": ".BO",  "close_hour": 10},
+    "SSE":     {"suffix": ".SS",  "close_hour": 7},
+    "SZSE":    {"suffix": ".SZ",  "close_hour": 7},
+    "KRX":     {"suffix": ".KS",  "close_hour": 6},
+    "EPA":     {"suffix": ".PA",  "close_hour": 16},
+    "AMS":     {"suffix": ".AS",  "close_hour": 16},
+    "FRA":     {"suffix": ".F",   "close_hour": 16},
+    "XETRA":   {"suffix": ".DE",  "close_hour": 16},
+    "BME":     {"suffix": ".MC",  "close_hour": 16},
+    "SIX":     {"suffix": ".SW",  "close_hour": 16},
+    "TWSE":    {"suffix": ".TW",  "close_hour": 6},
+    "SET":     {"suffix": ".BK",  "close_hour": 10},
+    "IDX":     {"suffix": ".JK",  "close_hour": 9},
+    "BOVESPA": {"suffix": ".SA",  "close_hour": 21},
+    "BCBA":    {"suffix": ".BA",  "close_hour": 21},
+    "BMV":     {"suffix": ".MX",  "close_hour": 21},
+    "CPH":     {"suffix": ".CO",  "close_hour": 16},
 }
 
 _US_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "OTC"}
 
 
-# ------------------------------------------------------------------
-# Internal helpers
-# ------------------------------------------------------------------
+def _yf_suffix(exchange: str) -> str:
+    return _EXCHANGE.get(exchange, {}).get("suffix", "")
+
+
+def _close_hour(exchange: str) -> int:
+    return _EXCHANGE.get(exchange, {}).get("close_hour", 21)
+
 
 def _resolve_ticker(ticker: str) -> tuple[str, str]:
-    """Split 'AAPL:NASDAQ' → ('AAPL', 'NASDAQ'). Bare 'AAPL' → ('AAPL', 'NASDAQ')."""
     if ":" in ticker:
         sym, exchange = ticker.split(":", 1)
         return sym, exchange
@@ -90,29 +65,31 @@ def _resolve_ticker(ticker: str) -> tuple[str, str]:
 
 
 def _to_utc(ts) -> pd.Timestamp:
-    """Convert any timestamp to UTC, whether tz-aware or tz-naive."""
     t = pd.Timestamp(ts)
     if t.tzinfo is None:
         return t.tz_localize("UTC")
     return t.tz_convert("UTC")
 
 
-def _yf_sym(ticker: str) -> str:
-    """Return the yfinance-ready symbol with exchange suffix (e.g. 'D05.SI')."""
-    sym, exchange = _resolve_ticker(ticker)
-    return sym + _YF_SUFFIX.get(exchange, "")
+def _to_event_ts(ts) -> pd.Timestamp:
+    # Nanoseconds zeroed because kdb-x timestamp equality is exact.
+    return _to_utc(ts).replace(hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
 
 
-# ------------------------------------------------------------------
-# Public ingestion functions
-# ------------------------------------------------------------------
+def _to_float(v) -> float:
+    try:
+        f = float(v)
+        return f if f == f else float("nan")
+    except (TypeError, ValueError):
+        return float("nan")
+
 
 def ingest_prices(db: "PitDB", ticker: str, start: str, end: str | None = None):
-    """Fetch daily OHLCV from yfinance. knowledge_time = market close on each date."""
+    """knowledge_time = market close time on each trading date."""
     sym, exchange = _resolve_ticker(ticker)
     qualified = f"{sym}:{exchange}"
-    yf_symbol = sym + _YF_SUFFIX.get(exchange, "")
-    close_hour = _CLOSE_UTC_HOUR.get(exchange, 21)
+    yf_symbol = sym + _yf_suffix(exchange)
+    close_hour = _close_hour(exchange)
 
     raw = yf.download(yf_symbol, start=start, end=end, auto_adjust=False, progress=False)
     if raw.empty:
@@ -125,7 +102,7 @@ def ingest_prices(db: "PitDB", ticker: str, start: str, end: str | None = None):
 
     rows = []
     for date, row in raw.iterrows():
-        date_ts = _to_utc(date).replace(hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
+        date_ts = _to_event_ts(date)
         knowledge_ts = date_ts.replace(hour=close_hour, minute=0, second=0)
         rows.append({
             "event_time": date_ts,
@@ -147,10 +124,10 @@ def ingest_prices(db: "PitDB", ticker: str, start: str, end: str | None = None):
 
 
 def ingest_corporate_actions(db: "PitDB", ticker: str, start: str, end: str | None = None):
-    """Fetch splits and dividends from yfinance. knowledge_time = announcement date."""
+    """knowledge_time = announcement date."""
     sym, exchange = _resolve_ticker(ticker)
     qualified = f"{sym}:{exchange}"
-    yf_symbol = sym + _YF_SUFFIX.get(exchange, "")
+    yf_symbol = sym + _yf_suffix(exchange)
     t = yf.Ticker(yf_symbol)
 
     splits = t.splits
@@ -177,10 +154,7 @@ def ingest_corporate_actions(db: "PitDB", ticker: str, start: str, end: str | No
 
 
 def ingest_fundamentals_edgar(db: "PitDB", ticker: str):
-    """
-    Fetch fundamentals from SEC EDGAR XBRL API (US equities only).
-    knowledge_time = EDGAR filing date (when the filing became public).
-    """
+    """US equities only. knowledge_time = SEC EDGAR filing date."""
     sym, _ = _resolve_ticker(ticker)
     cik = _get_cik(sym)
     if cik is None:
@@ -241,28 +215,14 @@ def ingest_fundamentals_edgar(db: "PitDB", ticker: str):
 
 
 def ingest_fundamentals_sgx(db: "PitDB", ticker: str):
-    """
-    Fetch SGX fundamentals from yfinance.
-    knowledge_time = earnings announcement date from yfinance earnings_dates.
-    event_time = period-end date from quarterly_income_stmt.
-    Single provenance source (yfinance provides both dates and values).
-    Note: announcement dates are approximate — yfinance timestamps reflect when
-    data became available in Yahoo's system, not the official SGX filing time.
-    """
+    """SGX equities. knowledge_time = yfinance earnings announcement date (approximate —
+    reflects Yahoo Finance availability, not the official SGX filing timestamp)."""
     sym, exchange = _resolve_ticker(ticker)
     qualified = f"{sym}:{exchange}"
-    yf_symbol = sym + _YF_SUFFIX.get(exchange, ".SI")
+    yf_symbol = sym + _yf_suffix(exchange)
     t = yf.Ticker(yf_symbol)
     yf_url = f"https://finance.yahoo.com/quote/{yf_symbol}"
 
-    def _val(v):
-        try:
-            f = float(v)
-            return f if f == f else float("nan")
-        except (TypeError, ValueError):
-            return float("nan")
-
-    # Build announcement date list from earnings_dates (most reliable yfinance source)
     try:
         ed = t.earnings_dates
     except Exception:
@@ -272,14 +232,13 @@ def ingest_fundamentals_sgx(db: "PitDB", ticker: str):
     eps_by_announcement: dict[pd.Timestamp, float] = {}
     if ed is not None and not ed.empty:
         for ann_ts, row in ed.iterrows():
-            ann_day = _to_utc(ann_ts).replace(hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
+            ann_day = _to_event_ts(ann_ts)
             announcement_dates.append(ann_day)
             reported = row.get("Reported EPS")
             if reported is not None and reported == reported:
                 eps_by_announcement[ann_day] = float(reported)
         announcement_dates = sorted(announcement_dates)
 
-    # Get quarterly income statement for period-end dates and values
     try:
         qi = t.quarterly_income_stmt
     except Exception:
@@ -290,20 +249,20 @@ def ingest_fundamentals_sgx(db: "PitDB", ticker: str):
 
     rows = []
     for period_end in qi.columns:
-        event_ts = _to_utc(period_end).replace(hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
+        event_ts = _to_event_ts(period_end)
         knowledge_ts = _match_announcement_date(event_ts, announcement_dates) or event_ts
 
-        # EPS: prefer income_stmt Basic EPS, fall back to earnings_dates Reported EPS
+        # Prefer income_stmt Basic EPS; fall back to earnings_dates Reported EPS.
         eps = float("nan")
         if "Basic EPS" in qi.index:
-            eps = _val(qi.loc["Basic EPS", period_end])
+            eps = _to_float(qi.loc["Basic EPS", period_end])
         if (eps != eps) and knowledge_ts in eps_by_announcement:
             eps = eps_by_announcement[knowledge_ts]
 
         revenue = float("nan")
         for label in ("Total Revenue", "Revenue"):
             if label in qi.index:
-                revenue = _val(qi.loc[label, period_end])
+                revenue = _to_float(qi.loc[label, period_end])
                 break
 
         rows.append({
@@ -325,13 +284,10 @@ def ingest_fundamentals_sgx(db: "PitDB", ticker: str):
 
 
 def ingest_earnings_history(db: "PitDB", ticker: str):
-    """
-    Fetch earnings history (EPS estimate vs actual) from yfinance.
-    knowledge_time = earnings announcement date (when results became public).
-    """
+    """knowledge_time = earnings announcement date."""
     sym, exchange = _resolve_ticker(ticker)
     qualified = f"{sym}:{exchange}"
-    yf_symbol = sym + _YF_SUFFIX.get(exchange, "")
+    yf_symbol = sym + _yf_suffix(exchange)
     t = yf.Ticker(yf_symbol)
 
     try:
@@ -342,9 +298,6 @@ def ingest_earnings_history(db: "PitDB", ticker: str):
     if eh is None or (hasattr(eh, "empty") and eh.empty):
         return
 
-    def _val(v):
-        return float(v) if v is not None and v == v else float("nan")
-
     rows = []
     for date, row in eh.iterrows():
         report_ts = _to_utc(date)
@@ -353,9 +306,9 @@ def ingest_earnings_history(db: "PitDB", ticker: str):
             "knowledge_time": report_ts,
             "ticker": qualified,
             "period": str(row.get("period", "") or ""),
-            "eps_estimate": _val(row.get("epsEstimate")),
-            "eps_actual": _val(row.get("epsActual")),
-            "surprise_pct": _val(row.get("surprisePercent")),
+            "eps_estimate": _to_float(row.get("epsEstimate")),
+            "eps_actual": _to_float(row.get("epsActual")),
+            "surprise_pct": _to_float(row.get("surprisePercent")),
         })
         _write_provenance(db, qualified, report_ts, report_ts,
                           table_name="earnings_history",
@@ -368,7 +321,7 @@ def ingest_earnings_history(db: "PitDB", ticker: str):
 
 
 def ingest(db: "PitDB", ticker: str, start: str, end: str | None = None):
-    """Ingest all data for a ticker. Routes fundamentals to the correct source by exchange."""
+    """Ingest all data for a ticker, routing fundamentals by exchange."""
     _, exchange = _resolve_ticker(ticker)
     ingest_prices(db, ticker, start, end)
     ingest_corporate_actions(db, ticker, start, end)
@@ -379,24 +332,19 @@ def ingest(db: "PitDB", ticker: str, start: str, end: str | None = None):
     ingest_earnings_history(db, ticker)
 
 
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
-
 def _write_corporate_action(db, ticker, event_ts, knowledge_ts, action_type, factor):
-    df = pd.DataFrame([{
+    db._append_df("corporate_actions", pd.DataFrame([{
         "event_time": event_ts,
         "knowledge_time": knowledge_ts,
         "ticker": ticker,
         "action_type": action_type,
         "factor": factor,
-    }])
-    db._append_df("corporate_actions", df)
+    }]))
 
 
 def _write_provenance(db, ticker, event_ts, knowledge_ts, *,
                       table_name, source_name, source_url, source_timestamp):
-    df = pd.DataFrame([{
+    db._append_df("provenance", pd.DataFrame([{
         "event_time": event_ts,
         "knowledge_time": knowledge_ts,
         "ticker": ticker,
@@ -404,17 +352,15 @@ def _write_provenance(db, ticker, event_ts, knowledge_ts, *,
         "source_name": source_name,
         "source_url": source_url,
         "source_timestamp": source_timestamp,
-    }])
-    db._append_df("provenance", df)
+    }]))
 
 
 def _get_cik(symbol: str) -> int | None:
-    tickers_url = "https://www.sec.gov/files/company_tickers.json"
-    r = requests.get(tickers_url, headers=EDGAR_HEADERS, timeout=15)
+    r = requests.get("https://www.sec.gov/files/company_tickers.json",
+                     headers=EDGAR_HEADERS, timeout=15)
     if r.status_code != 200:
         return None
-    tickers = r.json()
-    for entry in tickers.values():
+    for entry in r.json().values():
         if entry.get("ticker", "").upper() == symbol.upper():
             return int(entry["cik_str"])
     return None
@@ -424,7 +370,6 @@ def _match_announcement_date(
     event_ts: pd.Timestamp,
     announcement_dates: list[pd.Timestamp],
 ) -> pd.Timestamp | None:
-    """Return the earliest announcement date on or after event_ts, or None."""
     for dt in announcement_dates:
         if dt >= event_ts:
             return dt
@@ -433,7 +378,7 @@ def _match_announcement_date(
 
 def _extract_concept(facts: dict, concept: str) -> list[dict]:
     units = facts.get(concept, {}).get("units", {})
-    # EPS uses "USD/shares"; monetary values use "USD"
+    # EPS is denominated in "USD/shares"; monetary values in "USD".
     data = units.get("USD") or units.get("USD/shares") or []
     seen = set()
     out = []
