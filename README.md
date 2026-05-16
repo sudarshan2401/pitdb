@@ -145,6 +145,8 @@ db.provenance("AAPL:NASDAQ", event_time="2024-09-30")
 # q escape hatch (disabled by default for safety)
 # export PITDB_ENABLE_UNSAFE_QUERY=1
 db.query("select from prices where ticker=`AAPL:NASDAQ")
+# Or opt in at construction time:
+# db = PitDB("localhost", 5000, allow_unsafe_query=True)
 ```
 
 ### Snapshot

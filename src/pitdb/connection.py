@@ -26,8 +26,8 @@ class PitDB:
     ):
         if not allow_insecure_remote and not self._is_loopback_host(host):
             raise ValueError(
-                "Refusing insecure remote connection. Use localhost/loopback or set "
-                "allow_insecure_remote=True explicitly."
+                f"Refusing insecure remote connection to '{host}'. "
+                "Use localhost/loopback or set allow_insecure_remote=True explicitly."
             )
         self._mode = "ipc"
         self._allow_unsafe_query = self._unsafe_query_enabled(allow_unsafe_query)
