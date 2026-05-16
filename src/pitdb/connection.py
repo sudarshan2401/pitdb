@@ -12,6 +12,7 @@ import pykx as kx
 from .schema import SCHEMA_Q
 
 _FUNCTIONS_Q_PATH = Path(__file__).parent / "functions.q"
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
 class PitDB:
@@ -51,9 +52,7 @@ class PitDB:
     def _unsafe_query_enabled(explicit: bool | None) -> bool:
         if explicit is not None:
             return explicit
-        return os.getenv("PITDB_ENABLE_UNSAFE_QUERY", "").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
+        return os.getenv("PITDB_ENABLE_UNSAFE_QUERY", "").strip().lower() in _TRUE_ENV_VALUES
 
     @staticmethod
     def _is_loopback_host(host: str) -> bool:
