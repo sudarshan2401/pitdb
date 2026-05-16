@@ -58,6 +58,7 @@ class PitDB:
     def _is_loopback_host(host: str) -> bool:
         if host == "localhost":
             return True
+        # Accept IPv6 literals that may be passed in bracket form (e.g. "[::1]").
         normalized = host.strip().strip("[]")
         try:
             return ipaddress.ip_address(normalized).is_loopback
