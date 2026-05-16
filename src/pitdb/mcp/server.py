@@ -6,7 +6,9 @@ Start with: pitdb serve [--data-dir PATH]
 
 from __future__ import annotations
 
+import os
 import math
+from datetime import date
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -14,12 +16,39 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("pitdb")
 
 _db: Any = None  # set by serve() before the server starts
+_MAX_QUERY_SPAN_DAYS = int(os.getenv("PITDB_MCP_MAX_QUERY_SPAN_DAYS", "3650"))
+_MAX_ROWS_PER_RESPONSE = int(os.getenv("PITDB_MCP_MAX_ROWS_PER_RESPONSE", "10000"))
 
 
 def _get_db():
     if _db is None:
         raise RuntimeError("pitdb MCP server not initialised — call serve()")
     return _db
+
+
+def _parse_date_only(value: str) -> date:
+    return date.fromisoformat(value)
+
+
+def _validate_date_range(start: str, end: str):
+    start_date = _parse_date_only(start)
+    end_date = _parse_date_only(end)
+    if end_date < start_date:
+        raise ValueError(f"Invalid range: end date {end} is before start date {start}.")
+    span_days = (end_date - start_date).days
+    if span_days > _MAX_QUERY_SPAN_DAYS:
+        raise ValueError(
+            f"Date range too large ({span_days} days). "
+            f"Maximum allowed is {_MAX_QUERY_SPAN_DAYS} days."
+        )
+
+
+def _enforce_row_limit(size: int):
+    if size > _MAX_ROWS_PER_RESPONSE:
+        raise ValueError(
+            f"Result too large ({size} rows). "
+            f"Maximum allowed is {_MAX_ROWS_PER_RESPONSE}. Narrow the date range."
+        )
 
 
 # ------------------------------------------------------------------
@@ -72,7 +101,9 @@ def get_price_history(ticker: str, start: str, end: str, as_of_date: str) -> lis
         List of dicts, one per trading day, sorted by date ascending.
     """
     db = _get_db()
+    _validate_date_range(start, end)
     df = db.get_price_history(ticker, start, end, as_of_date)
+    _enforce_row_limit(len(df))
     if df.empty:
         return []
     records = []
@@ -128,7 +159,9 @@ def get_earnings_history(ticker: str, start: str, end: str, as_of_date: str) -> 
         List of dicts with keys: date, period, eps_estimate, eps_actual, surprise_pct.
     """
     db = _get_db()
+    _validate_date_range(start, end)
     df = db.get_earnings_history(ticker, start, end, as_of_date)
+    _enforce_row_limit(len(df))
     if df.empty:
         return []
     records = []
@@ -178,7 +211,9 @@ def get_corporate_actions(ticker: str, start: str, end: str, as_of_date: str) ->
         List of dicts with keys: date, action_type ('split' or 'dividend'), factor.
     """
     db = _get_db()
+    _validate_date_range(start, end)
     df = db.get_corporate_actions(ticker, start, end, as_of_date)
+    _enforce_row_limit(len(df))
     if df.empty:
         return []
     records = []
@@ -207,6 +242,7 @@ def check_data_availability(ticker: str, start: str, end: str) -> dict:
         Dict with keys: prices, fundamentals, corporate_actions — each an integer count.
     """
     db = _get_db()
+    _validate_date_range(start, end)
     return db.check_data_availability(ticker, start, end)
 
 

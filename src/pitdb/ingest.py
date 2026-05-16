@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -10,7 +11,11 @@ import yfinance as yf
 if TYPE_CHECKING:
     from .connection import PitDB
 
-EDGAR_HEADERS = {"User-Agent": "pitdb/0.1 sudarshan.k@u.nus.edu"}
+_EDGAR_USER_AGENT = os.getenv(
+    "PITDB_EDGAR_USER_AGENT",
+    "pitdb/0.1 (+https://github.com/sudarshan2401/pitdb)",
+)
+EDGAR_HEADERS = {"User-Agent": _EDGAR_USER_AGENT}
 
 # Per-exchange yfinance suffix and approximate UTC market close hour.
 # close_hour ignores DST — sufficient for date-level knowledge_time accuracy.

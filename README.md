@@ -88,6 +88,8 @@ db.get_as_of("AAPL:NASDAQ", "eps", as_of_event="2020-06-27", as_of_knowledge="20
 db = PitDB.local()                    # managed local kdb-x in ~/.pitdb/data
 db = PitDB.local(data_dir="/my/path") # custom data directory
 db = PitDB("localhost", 5000)         # connect to external kdb-x instance
+# For non-loopback hosts, opt in explicitly:
+# db = PitDB("10.0.0.5", 5000, allow_insecure_remote=True)
 ```
 
 ### Ingestion
@@ -140,7 +142,8 @@ db.provenance("AAPL:NASDAQ")
 # Provenance for a specific period-end date
 db.provenance("AAPL:NASDAQ", event_time="2024-09-30")
 
-# q escape hatch
+# q escape hatch (disabled by default for safety)
+# export PITDB_ENABLE_UNSAFE_QUERY=1
 db.query("select from prices where ticker=`AAPL:NASDAQ")
 ```
 
@@ -191,6 +194,9 @@ pitdb serve --data-dir ~/.pitdb/data
 | `list_tickers` | All instruments in the database |
 
 All tools accept `as_of_date` — only data known on or before that date is returned.
+For safety, MCP range tools enforce guardrails:
+- `PITDB_MCP_MAX_QUERY_SPAN_DAYS` (default: `3650`)
+- `PITDB_MCP_MAX_ROWS_PER_RESPONSE` (default: `10000`)
 
 **Claude Desktop config** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
