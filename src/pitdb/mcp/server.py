@@ -34,7 +34,7 @@ def _validate_date_range(start: str, end: str):
     start_date = _parse_date_only(start)
     end_date = _parse_date_only(end)
     if end_date < start_date:
-        raise ValueError(f"Invalid range: end date {end} is before start date {start}.")
+        raise ValueError(f"Invalid range: end date {end_date} is before start date {start_date}.")
     span_days = (end_date - start_date).days
     if span_days > _MAX_QUERY_SPAN_DAYS:
         raise ValueError(
