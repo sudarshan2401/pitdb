@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Distribution / packaging
+site-packages/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Type checkers
+.mypy_cache/
+.pytype/
+.pyre/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# pitdb local data
+~/.pitdb/
+*.qdb
+*.q.lock
+
+# kdb-x / PyKX
+*.qsp
+*.kxlic
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Claude context files
+CONTEXT.md
+
+# Logs
+*.log
