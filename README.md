@@ -1,5 +1,5 @@
 # pitdb
-
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/sudarshan2401/pitdb)
 <p align="center">
   <img src="assets/logo.png" alt="pitdb logo" width="180" />
 </p>
