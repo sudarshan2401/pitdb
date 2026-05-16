@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import ipaddress
+import socket
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -63,7 +64,18 @@ class PitDB:
         try:
             return ipaddress.ip_address(normalized).is_loopback
         except ValueError:
+            pass
+        try:
+            resolved = socket.getaddrinfo(normalized, None)
+        except socket.gaierror:
             return False
+        ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+        for entry in resolved:
+            try:
+                ips.append(ipaddress.ip_address(entry[4][0].strip("[]")))
+            except ValueError:
+                return False
+        return bool(ips) and all(ip.is_loopback for ip in ips)
 
     def _q(self, code: str, *args) -> Any:
         if self._mode == "embedded":

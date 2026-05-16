@@ -34,12 +34,12 @@ def _validate_date_range(start: str, end: str):
     start_date = _parse_date_only(start)
     end_date = _parse_date_only(end)
     if end_date < start_date:
-        raise ValueError(f"Invalid range: end date {end_date} is before start date {start_date}.")
+        raise ValueError(f"Invalid range: end date {end_date} is before start date {start_date}")
     span_days = (end_date - start_date).days + 1
     if span_days > _MAX_QUERY_SPAN_DAYS:
         raise ValueError(
             f"Date range too large ({span_days} inclusive days). "
-            f"Maximum allowed is {_MAX_QUERY_SPAN_DAYS} days."
+            f"Maximum allowed is {_MAX_QUERY_SPAN_DAYS} days"
         )
 
 
@@ -47,7 +47,7 @@ def _enforce_row_limit(size: int):
     if size > _MAX_ROWS_PER_RESPONSE:
         raise ValueError(
             f"Result too large ({size} rows). "
-            f"Maximum allowed is {_MAX_ROWS_PER_RESPONSE}. Narrow the date range."
+            f"Maximum allowed is {_MAX_ROWS_PER_RESPONSE}. Narrow the date range"
         )
 
 

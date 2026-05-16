@@ -1,4 +1,5 @@
 import pytest
+import socket
 
 from pitdb.connection import PitDB
 
@@ -8,7 +9,12 @@ def test_loopback_host_detection():
     assert PitDB._is_loopback_host("127.0.0.1")
     assert PitDB._is_loopback_host("::1")
     assert not PitDB._is_loopback_host("192.168.1.10")
-    assert not PitDB._is_loopback_host("db.internal")
+    assert not PitDB._is_loopback_host("no-such-host.invalid")
+
+
+def test_loopback_hostname_resolution(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args, **_kwargs: [(None, None, None, None, ("127.0.0.2", 0))])
+    assert PitDB._is_loopback_host("localhost.localdomain")
 
 
 def test_query_disabled_by_default():
