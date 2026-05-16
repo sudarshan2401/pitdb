@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import ipaddress
+import socket
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -11,11 +13,25 @@ import pykx as kx
 from .schema import SCHEMA_Q
 
 _FUNCTIONS_Q_PATH = Path(__file__).parent / "functions.q"
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
 class PitDB:
-    def __init__(self, host: str, port: int):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        allow_insecure_remote: bool = False,
+        allow_unsafe_query: bool | None = None,
+    ):
+        if not allow_insecure_remote and not self._is_loopback_host(host):
+            raise ValueError(
+                f"Refusing insecure remote connection to '{host}'. "
+                "Use localhost/loopback or set allow_insecure_remote=True explicitly."
+            )
         self._mode = "ipc"
+        self._allow_unsafe_query = self._unsafe_query_enabled(allow_unsafe_query)
         self._conn = kx.QConnection(host=host, port=port)
         self._conn(SCHEMA_Q)
         self._conn(f"\\l {_FUNCTIONS_Q_PATH}")
@@ -25,12 +41,41 @@ class PitDB:
         instance = cls.__new__(cls)
         instance._mode = "embedded"
         instance._conn = None
+        instance._allow_unsafe_query = cls._unsafe_query_enabled(None)
         instance._data_dir = Path(data_dir or os.path.expanduser("~/.pitdb/data"))
         instance._data_dir.mkdir(parents=True, exist_ok=True)
         kx.q(SCHEMA_Q)
         kx.q(f"\\l {_FUNCTIONS_Q_PATH}")
         instance._load_tables()
         return instance
+
+    @staticmethod
+    def _unsafe_query_enabled(explicit: bool | None) -> bool:
+        if explicit is not None:
+            return explicit
+        return os.getenv("PITDB_ENABLE_UNSAFE_QUERY", "").strip().lower() in _TRUE_ENV_VALUES
+
+    @staticmethod
+    def _is_loopback_host(host: str) -> bool:
+        if host == "localhost":
+            return True
+        # Accept IPv6 literals that may be passed in bracket form (e.g. "[::1]").
+        normalized = host.strip().strip("[]")
+        try:
+            return ipaddress.ip_address(normalized).is_loopback
+        except ValueError:
+            pass
+        try:
+            resolved = socket.getaddrinfo(normalized, None)
+        except socket.gaierror:
+            return False
+        ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+        for entry in resolved:
+            try:
+                ips.append(ipaddress.ip_address(entry[4][0].strip("[]")))
+            except ValueError:
+                return False
+        return bool(ips) and all(ip.is_loopback for ip in ips)
 
     def _q(self, code: str, *args) -> Any:
         if self._mode == "embedded":
@@ -227,6 +272,12 @@ class PitDB:
 
     def query(self, q_string: str) -> Any:
         """Escape hatch for raw q."""
+        if not self._allow_unsafe_query:
+            raise RuntimeError(
+                "db.query() is disabled by default for safety. "
+                "Set PITDB_ENABLE_UNSAFE_QUERY=1 or construct PitDB with "
+                "allow_unsafe_query=True to enable it."
+            )
         return self._q(q_string)
 
     def save(self):
